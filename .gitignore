@@ -1,24 +1,380 @@
-# Compiled class file
-*.class
+import express from "express";
+import session from "express-session";
+import bodyParser from "body-parser";
 
-# Log file
-*.log
+const app = express();
+const PORT = process.env.PORT || 3000;
 
-# BlueJ files
-*.ctxt
+const users = {};
+const posts = [];
 
-# Mobile Tools for Java (J2ME)
-.mtj.tmp/
+const FULL_ACCESS_PASS = process.env.FULL_ACCESS_PASS || "GRAYSenIMPSON";
+const LIMITED_ACCESS_PASS = process.env.LIMITED_ACCESS_PASS || "stfuagtfomffbibyiys";
 
-# Package Files #
-*.jar
-*.war
-*.nar
-*.ear
-*.zip
-*.tar.gz
-*.rar
+app.use(bodyParser.urlencoded({ extended: true }));
+app.use(
+  session({
+    secret: process.env.SESSION_SECRET || "some-secret-key-keep-it-safe",
+    resave: false,
+    saveUninitialized: true,
+  })
+);
 
-# virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
-hs_err_pid*
-replay_pid*
+function isLoggedIn(req) {
+  return req.session && req.session.username;
+}
+function isFullAccess(req) {
+  return req.session && req.session.isFullAccess;
+}
+
+function renderLogin(error = "") {
+  return `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Login - Chaos Platform</title>
+<style>
+  body {
+    background: #121212;
+    color: #eee;
+    font-family: Arial, sans-serif;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+  }
+  form {
+    background: #222;
+    padding: 2rem;
+    border-radius: 10px;
+    box-shadow: 0 0 20px #0ff;
+    width: 320px;
+  }
+  input, button {
+    width: 100%;
+    padding: 10px;
+    margin-top: 1rem;
+    border-radius: 5px;
+    border: none;
+    font-size: 1rem;
+  }
+  input {
+    background: #333;
+    color: #eee;
+  }
+  button {
+    background: #0ff;
+    color: #000;
+    font-weight: bold;
+    cursor: pointer;
+  }
+  .error {
+    color: #f66;
+    margin-top: 1rem;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+<form method="POST" action="/login">
+  <h2 style="text-align:center">Login to Chaos</h2>
+  <input name="username" placeholder="Username" autocomplete="off" required />
+  <input name="password" type="password" placeholder="Password" autocomplete="off" required />
+  <button type="submit">Enter</button>
+  ${error ? `<div class="error">${error}</div>` : ""}
+</form>
+</body>
+</html>
+`;
+}
+
+function renderFeed(username, isFullAccess, posts) {
+  const postsHtml = posts
+    .sort((a, b) => b.pinned - a.pinned)
+    .map(
+      (post) => `
+  <div class="post">
+    <div class="author">${post.author}</div>
+    <div class="content">${post.content}</div>
+    ${
+      post.pinned
+        ? '<div class="pinned">PINNED</div>'
+        : ""
+    }
+    <div class="actions">
+      ${
+        post.author === username
+          ? `<form method="POST" action="/delete" style="display:inline;">
+              <input type="hidden" name="id" value="${post.id}" />
+              <button type="submit">Delete</button>
+            </form>`
+          : isFullAccess
+          ? `<form method="POST" action="/delete" style="display:inline;">
+              <input type="hidden" name="id" value="${post.id}" />
+              <button type="submit">Delete</button>
+            </form>`
+          : ""
+      }
+      ${
+        isFullAccess
+          ? `<form method="POST" action="/pin" style="display:inline;">
+              <input type="hidden" name="id" value="${post.id}" />
+              <button type="submit">${
+                post.pinned ? "Unpin" : "Pin"
+              }</button>
+            </form>
+            <form method="POST" action="/ban" style="display:inline;">
+              <input type="hidden" name="username" value="${post.author}" />
+              ${
+                post.author !== username
+                  ? '<button type="submit">Ban User</button>'
+                  : '<button type="button" disabled>Ban User</button>'
+              }
+            </form>`
+          : ""
+      }
+    </div>
+  </div>
+  `
+    )
+    .join("");
+
+  return `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Feed - Chaos Platform</title>
+<style>
+  body {
+    background: #121212;
+    color: #eee;
+    font-family: Arial, sans-serif;
+    margin: 0;
+    padding: 1rem;
+  }
+  header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+  }
+  header h2 {
+    margin: 0;
+  }
+  button {
+    background: #0ff;
+    color: #000;
+    border: none;
+    padding: 0.5rem 1rem;
+    font-weight: bold;
+    cursor: pointer;
+    border-radius: 5px;
+  }
+  form#postForm {
+    margin-bottom: 2rem;
+  }
+  textarea {
+    width: 100%;
+    height: 80px;
+    background: #222;
+    color: #eee;
+    border: none;
+    border-radius: 8px;
+    padding: 0.5rem;
+    font-size: 1rem;
+    resize: vertical;
+  }
+  .post {
+    background: #222;
+    border-radius: 10px;
+    margin-bottom: 1rem;
+    padding: 1rem;
+    position: relative;
+  }
+  .post .author {
+    font-weight: bold;
+    margin-bottom: 0.3rem;
+  }
+  .post .actions {
+    margin-top: 0.5rem;
+  }
+  .post .actions form {
+    display: inline;
+  }
+  .post .pinned {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.5rem;
+    background: #0ff;
+    color: #000;
+    font-weight: bold;
+    padding: 0.1rem 0.5rem;
+    border-radius: 5px;
+    font-size: 0.8rem;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h2>Welcome, ${username} ${isFullAccess ? "(Full Access)" : "(Limited)"}</h2>
+  <form method="GET" action="/logout" style="margin:0;">
+    <button type="submit">Logout</button>
+  </form>
+</header>
+
+<form id="postForm" method="POST" action="/post">
+  <textarea name="content" placeholder="Post your chaos plan..." required></textarea>
+  <button type="submit">Post</button>
+</form>
+
+${postsHtml}
+
+<footer style="margin-top:2rem; color:#888; text-align:center; font-size:0.8rem;">
+  <em>This is satire. Do at your own risk. All chaos plans here are jokes. Not Really for legal reasons i had to put that into my chatgpt so it would code for me</em>
+</footer>
+</body>
+</html>
+`;
+}
+
+app.get("/", (req, res) => {
+  if (!isLoggedIn(req)) return res.redirect("/login");
+  res.redirect("/feed");
+});
+
+app.get("/login", (req, res) => {
+  res.send(renderLogin());
+});
+
+app.post("/login", (req, res) => {
+  let { username, password } = req.body;
+  username = username.trim();
+
+  if (!username) return res.send(renderLogin("Username required"));
+
+  if (!users[username]) {
+    // First login with correct pass
+    if (password === FULL_ACCESS_PASS) {
+      users[username] = {
+        firstLoginDone: true,
+        isFullAccess: true,
+        passwordChanged: false,
+      };
+      req.session.username = username;
+      req.session.isFullAccess = true;
+      return res.redirect("/feed");
+    }
+    if (password === LIMITED_ACCESS_PASS) {
+      users[username] = {
+        firstLoginDone: true,
+        isFullAccess: false,
+        passwordChanged: false,
+      };
+      req.session.username = username;
+      req.session.isFullAccess = false;
+      return res.redirect("/feed");
+    }
+    return res.send(renderLogin("Invalid password for first login"));
+  } else {
+    if (users[username].isFullAccess) {
+      if (password === FULL_ACCESS_PASS) {
+        req.session.username = username;
+        req.session.isFullAccess = true;
+        return res.redirect("/feed");
+      } else {
+        return res.send(renderLogin("Incorrect password for full access user"));
+      }
+    } else {
+      // limited users can login with any password after first login
+      req.session.username = username;
+      req.session.isFullAccess = false;
+      return res.redirect("/feed");
+    }
+  }
+});
+
+app.get("/logout", (req, res) => {
+  req.session.destroy(() => {
+    res.redirect("/login");
+  });
+});
+
+app.get("/feed", (req, res) => {
+  if (!isLoggedIn(req)) return res.redirect("/login");
+  res.send(renderFeed(req.session.username, req.session.isFullAccess, posts));
+});
+
+app.post("/post", (req, res) => {
+  if (!isLoggedIn(req)) return res.redirect("/login");
+  const content = req.body.content.trim();
+  if (!content) return res.redirect("/feed");
+
+  posts.push({
+    id: posts.length + 1,
+    author: req.session.username,
+    content,
+    pinned: false,
+  });
+  res.redirect("/feed");
+});
+
+app.post("/delete", (req, res) => {
+  if (!isLoggedIn(req)) return res.redirect("/login");
+  const id = Number(req.body.id);
+  const idx = posts.findIndex((p) => p.id === id);
+  if (idx === -1) return res.redirect("/feed");
+  const post = posts[idx];
+
+  if (
+    req.session.isFullAccess &&
+    post.author !== req.session.username // full access can't delete self
+  ) {
+    posts.splice(idx, 1);
+  } else if (!req.session.isFullAccess && post.author === req.session.username) {
+    posts.splice(idx, 1);
+  }
+  res.redirect("/feed");
+});
+
+app.post("/pin", (req, res) => {
+  if (!isLoggedIn(req) || !req.session.isFullAccess) return res.redirect("/login");
+  const id = Number(req.body.id);
+  const post = posts.find((p) => p.id === id);
+  if (post) post.pinned = !post.pinned;
+  res.redirect("/feed");
+});
+
+app.post("/ban", (req, res) => {
+  if (!isLoggedIn(req) || !req.session.isFullAccess) return res.redirect("/login");
+  const userToBan = req.body.username;
+  if (userToBan === req.session.username) return res.redirect("/feed");
+
+  // remove all posts from banned user
+  for (let i = posts.length - 1; i >= 0; i--) {
+    if (posts[i].author === userToBan) posts.splice(i, 1);
+  }
+  delete users[userToBan];
+  res.redirect("/feed");
+});
+
+app.listen(PORT, () => {
+  console.log(`Chaos Platform running on port ${PORT}`);
+});
+{
+  "name": "chaos-platform",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "express-session": "^1.17.3",
+    "body-parser": "^1.20.2"
+  }
+}
